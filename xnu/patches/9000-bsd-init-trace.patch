@@ -1,1 +1,8 @@
+--- a/bsd/kern/bsd_init.c
++++ b/bsd/kern/bsd_init.c
+@@ -495,3 +495,3 @@
+ #else
+-#define DEBUG_BSDINIT 0
++#define DEBUG_BSDINIT 1
+ #endif
 
