@@ -1,0 +1,89 @@
+--- a/bsd/dev/sweet_ufs.c
++++ b/bsd/dev/sweet_ufs.c
+@@ -1442,2 +1442,6 @@
+ 	uint32_t cache = 0, wait = 0;
++	/* pandora_logonly=1: the console log is the only reason to touch the disk, so
++	 * the extents in /chosen live directly in whatever partition ufsroot= names. */
++	uint32_t logonly = 0;
++	PE_parse_boot_argn("pandora_logonly", &logonly, sizeof(logonly));
+ 	PE_parse_boot_argn("ufscache", &cache, sizeof(cache));
+@@ -1515,2 +1519,12 @@
+ 	}
++#if defined(PANDORA)
++	else if (!error && logonly == 1) {
++		/* No pinned root file: the partition bounds are all the log writer needs,
++		 * and fx_write_allowed() still accepts nothing but the log extents. */
++		fx_part_first = su.first_block;
++		fx_part_blocks = su.nblocks;
++		fx_root = true;
++		pl_load_extents();
++	}
++#endif
+ 	if (!fx_root) rw=0;
+@@ -1522,13 +1536,18 @@
+ 
+-	su.bmajor = bdevsw_add(-1, &sweet_ufs_bdevsw);
+-	if (su.bmajor < 0) {
+-		return ENXIO;
+-	}
+-	su.cmajor = cdevsw_add_with_bdev(-1, &sweet_ufs_cdevsw, su.bmajor);
+-	if (su.cmajor < 0) {
+-		return ENXIO;
++	if (logonly != 1) {
++		/* The early log calls this from the platform expert, before devfs is mounted:
++		 * nobody can open a node yet, so only the partition bounds are needed. */
++		su.bmajor = bdevsw_add(-1, &sweet_ufs_bdevsw);
++		if (su.bmajor < 0) {
++			return ENXIO;
++		}
++		su.cmajor = cdevsw_add_with_bdev(-1, &sweet_ufs_cdevsw, su.bmajor);
++		if (su.cmajor < 0) {
++			return ENXIO;
++		}
++		su.bdev = makedev(su.bmajor, 0);
++		devfs_make_node(su.bdev, DEVFS_BLOCK, UID_ROOT, GID_OPERATOR, 0640, "ufsroot0");
++		devfs_make_node(makedev(su.cmajor, 0), DEVFS_CHAR, UID_ROOT, GID_OPERATOR, 0640,
++		    "rufsroot0");
+ 	}
+-	su.bdev = makedev(su.bmajor, 0);
+-	devfs_make_node(su.bdev, DEVFS_BLOCK, UID_ROOT, GID_OPERATOR, 0640, "ufsroot0");
+-	devfs_make_node(makedev(su.cmajor, 0), DEVFS_CHAR, UID_ROOT, GID_OPERATOR, 0640, "rufsroot0");
+ 	/* Only now, with the partition bounds known, can writes be allowed. */
+@@ -2125,2 +2144,15 @@
+ 
++#if defined(PANDORA)
++/* pandora_earlylog=1: bring the disk up from the platform expert, before any other
++ * driver starts, so the console log is already on storage when a driver start hangs.
++ * The flush thread copies the ring from offset 0, so nothing printed earlier is lost.
++ */
++int pandora_early_log(void);
++int
++pandora_early_log(void)
++{
++	return sweet_ufs_init();
++}
++#endif
++
+ /* Root device for rd=ufsroot0 (IOFindBSDRoot). */
+--- a/iokit/Kernel/arm/SweetPlatformExpert.cpp
++++ b/iokit/Kernel/arm/SweetPlatformExpert.cpp
+@@ -9,2 +9,3 @@
+ #include <IOKit/IOPlatformExpert.h>
++#include <pexpert/pexpert.h>
+ #include <IOKit/IODeviceTreeSupport.h>
+@@ -23,2 +24,5 @@
+ OSDefineMetaClassAndStructors(SweetPlatformExpert, IODTPlatformExpert);
++#if defined(PANDORA)
++extern "C" int pandora_early_log(void);
++#endif
+ 
+@@ -33,2 +37,9 @@
+ 	IOLog("SWEET: platform expert registered\n");
++#if defined(PANDORA)
++	uint32_t earlylog = 0;
++	if (PE_parse_boot_argn("pandora_earlylog", &earlylog, sizeof(earlylog)) &&
++	    earlylog == 1) {
++		IOLog("SWEET: early storage log: %d\n", pandora_early_log());
++	}
++#endif
+ 	return true;
